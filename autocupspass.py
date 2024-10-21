@@ -1,100 +1,79 @@
 import nmap
 import paramiko
-from dotenv import load_dotenv
 import os
+import time
+from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Get variables from the .env file
 subnet = os.getenv("subnet")
 username = os.getenv("username")
 new_password = os.getenv("new_password")
-
+password_file = 'passwords.txt'  # Ensure this file contains possible old passwords
 
 def scan_subnet(subnet):
-    """Scan the given subnet for open SSH ports (22)."""
+    print(f"Scanning subnet {subnet} for hosts...")
     nm = nmap.PortScanner()
-    nm.scan(subnet, '22')  # Scanning for SSH port (22)
-    hosts = []
+    nm.scan(hosts=subnet, arguments='-sn')  # Ping scan
+    return nm.all_hosts()
 
-    for host in nm.all_hosts():
-        if 'tcp' in nm[host] and nm[host]['tcp'][22]['state'] == 'open':
-            hosts.append(host)
-    return hosts
+def read_passwords(file):
+    with open(file, 'r') as f:
+        return [line.strip() for line in f.readlines()]
 
-
-def change_password(host, username, old_password, new_password):
-    """Change the root password on the specified host using SSH."""
+def change_password(host, client):
     try:
-        # Create SSH client
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(host, username=username, password=old_password)
-
-        # Command to change the root password
-        stdin, stdout, stderr = ssh.exec_command(f'echo -e "{new_password}\\n{new_password}" | passwd root')
-        stdout.channel.recv_exit_status()  # Wait for command to finish
-
-        ssh.close()
-        print(f"Password successfully changed on {host}.")
+        # Open a session
+        ssh_session = client.invoke_shell()
+        
+        # Execute the command to change the password
+        ssh_session.send(f'passwd {username}\n')
+        ssh_session.send(f'{new_password}\n')
+        ssh_session.send(f'{new_password}\n')
+        
+        # Wait for the command to complete
+        time.sleep(1)
+        
+        # Check the output
+        output = ssh_session.recv(1024).decode('utf-8')
+        print(f"Password changed on {host}: {output}")
         return True
     except Exception as e:
-        print(f"Failed to connect or change password on {host}: {str(e)}")
+        print(f"Error changing password on {host}: {e}")
         return False
-
-
-def verify_password(host, username, new_password):
-    """Verify if the new password works by logging in via SSH."""
-    try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(host, username=username, password=new_password)
-
-        # Run a simple command to verify access
-        stdin, stdout, stderr = ssh.exec_command('whoami')
-        if stdout.read().strip() == 'root':
-            print(f"Successfully verified root access on {host}.")
-            ssh.close()
-            return True
-        else:
-            print(f"Failed to verify root access on {host}.")
-            ssh.close()
-            return False
-    except Exception as e:
-        print(f"Failed to verify root access on {host}: {str(e)}")
-        return False
-
-
-def try_passwords_from_file(host, username, new_password):
-    """Try different passwords from a file to find the correct old password."""
-    with open("passwords.txt", "r") as file:
-        for line in file:
-            old_password = line.strip()
-            print(f"Trying password {old_password} on {host}...")
-            if change_password(host, username, old_password, new_password):
-                return True
-    print(f"Failed to change password on {host} using all available old passwords.")
-    return False
-
 
 def main(subnet, username, new_password):
-    """Main function to scan, change passwords, and verify them."""
-    print(f"Scanning subnet {subnet} for SSH servers...")
     hosts = scan_subnet(subnet)
-
-    if not hosts:
-        print("No SSH hosts found.")
-        return
+    old_passwords = read_passwords(password_file)
 
     for host in hosts:
-        print(f"Attempting to change password on {host}...")
-        if try_passwords_from_file(host, username, new_password):
-            print(f"Password changed on {host}. Verifying...")
-            verify_password(host, username, new_password)
-        else:
-            print(f"Password change failed on {host}. Skipping verification.")
+        print(f"Trying passwords for host: {host}")
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        for old_password in old_passwords:
+            try:
+                client.connect(host, username=username, password=old_password)
+                # Only show the first three characters of the password
+                masked_password = old_password[:3] + '*' * (len(old_password) - 3)
+                print(f"Successfully connected to {host} with password: {masked_password}")
 
+                # Change password after successful connection
+                if change_password(host, client):
+                    # Log success to a file
+                    with open('success_log.txt', 'a') as log_file:
+                        log_file.write(f"Password changed for {host} to {new_password}\n")
+                break  # Exit password loop after successful change
+                
+            except paramiko.AuthenticationException:
+                masked_password = old_password[:3] + '*' * (len(old_password) - 3)
+                print(f"Authentication failed for {host} with password: {masked_password}")
+            except Exception as e:
+                masked_password = old_password[:3] + '*' * (len(old_password) - 3)
+                print(f"Failed to connect to {host} with password: {masked_password} - {e}")
 
-if __name__ == "__main__":
+        client.close()
+
+if __name__ == '__main__':
     main(subnet, username, new_password)
