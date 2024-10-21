@@ -1,5 +1,15 @@
 import nmap
 import paramiko
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Get variables from the .env file
+subnet = os.getenv("subnet")
+username = os.getenv("username")
+new_password = os.getenv("new_password")
 
 
 def scan_subnet(subnet):
@@ -56,7 +66,19 @@ def verify_password(host, username, new_password):
         return False
 
 
-def main(subnet, username, old_password, new_password):
+def try_passwords_from_file(host, username, new_password):
+    """Try different passwords from a file to find the correct old password."""
+    with open("passwords.txt", "r") as file:
+        for line in file:
+            old_password = line.strip()
+            print(f"Trying password {old_password} on {host}...")
+            if change_password(host, username, old_password, new_password):
+                return True
+    print(f"Failed to change password on {host} using all available old passwords.")
+    return False
+
+
+def main(subnet, username, new_password):
     """Main function to scan, change passwords, and verify them."""
     print(f"Scanning subnet {subnet} for SSH servers...")
     hosts = scan_subnet(subnet)
@@ -67,7 +89,7 @@ def main(subnet, username, old_password, new_password):
 
     for host in hosts:
         print(f"Attempting to change password on {host}...")
-        if change_password(host, username, old_password, new_password):
+        if try_passwords_from_file(host, username, new_password):
             print(f"Password changed on {host}. Verifying...")
             verify_password(host, username, new_password)
         else:
@@ -75,9 +97,4 @@ def main(subnet, username, old_password, new_password):
 
 
 if __name__ == "__main__":
-    subnet = "192.168.1.0/24"  # Example subnet, change to target subnet
-    username = "root"
-    old_password = "oldpassword"  # Replace with the known old password
-    new_password = "newpassword"  # Replace with the new password you want to set
-
-    main(subnet, username, old_password, new_password)
+    main(subnet, username, new_password)
